@@ -1,66 +1,70 @@
-from fastapi import  FastAPI, HTTPException
-from db import notes
-from models import Note
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import Column, Integer, String
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
+from db import SessionLocal, engine
+import models, schemas, crud
 
-SQLALCHEMY_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@192.168.56.101:5432/bsbo30"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-Base = declarative_base()
+# Создание таблиц в базе, если они ещё не созданы
+models.Base.metadata.create_all(bind=engine)
 
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    email = Column(String, unique=True, index=True)
-
-
+# Инициализация FastAPI-приложения
 app = FastAPI()
 
-@app.get("/notes")
-def get_all_notes():
-    return notes
+# Получение подключения к базе данных через Depends
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.get("/notes/{note_id}")
-def get_note_by_id(note_id: int):
-    if note_id < 0 or note_id > len(notes):
-        return HTTPException(status_code=400, detail="Id doe not be < 0 or > len of notes")
-    return notes[note_id]
+# --- Пользователи ---
 
-@app.get("/search_user")
-def search_by_user(keyword: str):
-    results = [note for note in notes if keyword.lower() in note.user.lower()]
-    return results
-@app.get("/search_message")
-def search_by_message(keyword: str):
-    results = [note for note in notes if keyword.lower() in note.message.lower()]
-    return results
+@app.post("/users/", response_model=schemas.UserOut)
+def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    return crud.create_user(db, user)
 
-@app.post("/notes")
-def create_new_note(note: Note):
-    notes.append(note)
-    return {"id": len(notes) - 1, "note": note}
+@app.get("/users/", response_model=list[schemas.UserOut])
+def read_users(db: Session = Depends(get_db)):
+    return crud.get_users(db)
 
-@app.post("/change_user")
-def change_user(keyword: str, new_user: str):
-    for note in notes:
-        if keyword.lower() in note.user.lower():
-            note.user = new_user
+@app.get("/users/{user_id}", response_model=schemas.UserOut)
+def read_user(user_id: int, db: Session = Depends(get_db)):
+    user = crud.get_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
-@app.post("/change_message")
-def change_message(keyword: str, new_message: str):
-    for note in notes:
-        if keyword.lower() in note.message.lower():
-            note.message = new_message
+# --- Заметки ---
+
+@app.post("/notes/", response_model=schemas.NoteOut)
+def create_note(note: schemas.NoteCreate, db: Session = Depends(get_db)):
+    return crud.create_note(db, note)
+
+@app.get("/notes/", response_model=list[schemas.NoteOut])
+def read_notes(db: Session = Depends(get_db)):
+    return crud.get_notes(db)
+
+@app.get("/notes/{note_id}", response_model=schemas.NoteOut)
+def read_note(note_id: int, db: Session = Depends(get_db)):
+    note = crud.get_note(db, note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return note
+
+@app.get("/users/{user_id}/notes", response_model=list[schemas.NoteOut])
+def read_notes_by_user(user_id: int, db: Session = Depends(get_db)):
+    return crud.get_notes_by_user(db, user_id)
+
+@app.put("/notes/{note_id}", response_model=schemas.NoteOut)
+def update_note(note_id: int, note: schemas.NoteBase, db: Session = Depends(get_db)):
+    updated = crud.update_note(db, note_id, note)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return updated
 
 @app.delete("/notes/{note_id}")
-def delete_note(note_id: int):
-    if note_id < 0 or note_id > len(notes):
-        return HTTPException(status_code=400, detail="Id doe not be < 0 or > len of notes")
-    deleted = notes.pop(note_id)
-    return {"message": "Note deleted", "note": deleted}
+def delete_note(note_id: int, db: Session = Depends(get_db)):
+    deleted = crud.delete_note(db, note_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return {"message": "Note deleted"}
